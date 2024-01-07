@@ -10,7 +10,7 @@ spring:
       payment-success: payment-success
       payment-fail: payment-fail
     consumer:
-      group-ip: payment-group
+      group-id: payment-group
       auto-offset-reset: latest
 
   datasource:

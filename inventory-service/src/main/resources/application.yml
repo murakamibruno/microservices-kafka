@@ -10,7 +10,7 @@ spring:
       inventory-success: inventory-success
       inventory-fail: inventory-fail
     consumer:
-      group-ip: inventory-group
+      group-id: inventory-group
       auto-offset-reset: latest
 
   datasource:

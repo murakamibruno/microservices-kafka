@@ -10,7 +10,7 @@ spring:
       product-validation-success: product-validation-success
       product-validation-fail: product-validation-fail
     consumer:
-      group-ip: product-validation-group
+      group-id: product-validation-group
       auto-offset-reset: latest
 
   datasource:

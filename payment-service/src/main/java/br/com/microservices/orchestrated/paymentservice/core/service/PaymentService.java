@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 
-import static br.com.microservices.orchestrated.paymentservice.core.enums.ESagaStatus.SUCCESS;
+import static br.com.microservices.orchestrated.paymentservice.core.enums.ESagaStatus.*;
 
 @Service
 @Slf4j
@@ -25,7 +25,6 @@ public class PaymentService {
     private static final String CURRENT_SOURCE="PAYMENT_SERVICE";
     private static final Double REDUCE_SUM_VALUE = 0.0;
     private static final Double MIN_AMOUNT_VALUE = 0.1;
-
 
     private final JsonUtil jsonUtil;
     private final PaymentProducer producer;
@@ -41,6 +40,7 @@ public class PaymentService {
             handleSuccess(event);
         } catch(Exception ex) {
             log.error("Error trying to realize payment: ", ex);
+            handleFailCurrentNotExecuted(event,ex.getMessage());
         }
         producer.sendEvent(jsonUtil.toJson(event));
     }
@@ -124,6 +124,31 @@ public class PaymentService {
             .createdAt(LocalDateTime.now())
             .build();
         event.addToHistory(history);
+    }
+
+    private void handleFailCurrentNotExecuted(Event event, String message) {
+        event.setStatus(ROLLBACK_PENDING);
+        event.setSource(CURRENT_SOURCE);
+        addHistory(event, "Fail to execute payment: ".concat(message));
+    }
+
+    public void realizeRefund(Event event) {
+        event.setStatus(FAIL);
+        event.setSource(CURRENT_SOURCE);
+        try {
+            changePaymentStatusToRefund(event);
+            addHistory(event, "Rollback executed on payment!");
+        } catch (Exception ex) {
+            addHistory(event, "Rollback not executed on payment: ".concat(ex.getMessage()));
+        }
+        producer.sendEvent(jsonUtil.toJson(event));
+    }
+
+    private void changePaymentStatusToRefund(Event event) {
+        var payment = findByOrderIdAndTransactionId(event);
+        payment.setStatus(EPaymentStatus.REFUND);
+        setEventAmountItems(event, payment);
+        save(payment);
     }
 
 }

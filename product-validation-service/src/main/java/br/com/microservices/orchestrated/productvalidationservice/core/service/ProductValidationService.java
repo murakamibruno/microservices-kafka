@@ -24,7 +24,7 @@ import static org.springframework.util.ObjectUtils.isEmpty;
 @AllArgsConstructor
 public class ProductValidationService {
 
-    private final static String CURRENT_SOURCE="PRODUCT_VALIDATION_SERVICE";
+    private static final String CURRENT_SOURCE="PRODUCT_VALIDATION_SERVICE";
 
     private final JsonUtil jsonUtil;
     private final ProductValidationProducer producer;
@@ -45,7 +45,7 @@ public class ProductValidationService {
 
     private void checkCurrentValidation(Event event) {
         validateProductsInformed(event);
-        if (validationRepository.existsByOrderIdAndTransactionId(event.getOrderId(), event.getTransactionId())) {
+        if (validationRepository.existsByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())) {
             throw new ValidationException("There is another transactionId for this validation");
         }
         event.getPayload().getProducts().forEach(product -> {

@@ -11,6 +11,7 @@ services:
     environment:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=123456
+      - TZ=America/Sao_Paulo
     ports:
       - "27017:27017"
 
@@ -23,6 +24,7 @@ services:
       - POSTGRES_DB=product-db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "5432:5432"
 
@@ -35,6 +37,7 @@ services:
       - POSTGRES_DB=payment-db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "5433:5432"
 
@@ -47,6 +50,7 @@ services:
       - POSTGRES_DB=inventory-db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "5434:5432"
 
@@ -100,6 +104,7 @@ services:
     environment:
       - KAFKA_BROKER=kafka:29092
       - MONGO_DB_URI=mongodb://admin:123456@order-db:27017
+      - TZ=America/Sao_Paulo
     ports:
       - "3000:3000"
 
@@ -112,6 +117,7 @@ services:
       - orchestrator-saga
     environment:
       - KAFKA_BROKER=kafka:29092
+      - TZ=America/Sao_Paulo
     ports:
       - "8080:8080"
 
@@ -130,6 +136,7 @@ services:
       - DB_NAME=product-db
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "8090:8090"
 
@@ -148,6 +155,7 @@ services:
       - DB_NAME=payment-db
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "8091:8091"
 
@@ -166,6 +174,7 @@ services:
       - DB_NAME=inventory-db
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      - TZ=America/Sao_Paulo
     ports:
       - "8092:8092"
 

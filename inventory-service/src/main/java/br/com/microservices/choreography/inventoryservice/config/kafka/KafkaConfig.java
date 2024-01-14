@@ -30,12 +30,14 @@ public class KafkaConfig {
     private String groupId;
     @Value("${spring.kafka.consumer.auto-offset-reset}")
     private String autoOffsetReset;
-    @Value("${spring.kafka.topic.orchestrator}")
-    private String orchestratorTopic;
     @Value("${spring.kafka.topic.inventory-success}")
     private String inventorySuccessTopic;
     @Value("${spring.kafka.topic.inventory-fail}")
     private String inventoryFailTopic;
+    @Value("${spring.kafka.topic.notify-ending}")
+    private String notifyEndingTopic;
+    @Value("${spring.kafka.topic.payment-fail}")
+    private String paymentFailTopic;
 
     private Map<String, Object> consumerProps() {
         var props = new HashMap<String, Object>();
@@ -74,11 +76,6 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic orchestratorTopic() {
-        return buildTopic(orchestratorTopic);
-    }
-
-    @Bean
     public NewTopic inventorySuccessTopic() {
         return buildTopic(inventorySuccessTopic);
     }
@@ -86,6 +83,16 @@ public class KafkaConfig {
     @Bean
     public NewTopic inventoryFailTopic() {
         return buildTopic(inventoryFailTopic);
+    }
+
+    @Bean
+    public NewTopic notifyEndingTopic() {
+        return buildTopic(notifyEndingTopic);
+    }
+
+    @Bean
+    public NewTopic paymentFailTopic() {
+        return buildTopic(paymentFailTopic);
     }
 
 }

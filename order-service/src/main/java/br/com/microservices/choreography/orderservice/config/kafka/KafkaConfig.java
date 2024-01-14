@@ -33,8 +33,8 @@ public class KafkaConfig {
     @Value("${spring.kafka.consumer.auto-offset-reset}")
     private String autoOffsetReset;
 
-    @Value("${spring.kafka.topic.start-saga}")
-    private String startSagaTopic;
+    @Value("${spring.kafka.topic.product-validation-start}")
+    private String productValidationStartTopic;
 
     @Value("${spring.kafka.topic.notify-ending}")
     private String notifyEndingTopic;
@@ -77,7 +77,7 @@ public class KafkaConfig {
 
     @Bean
     public NewTopic startSagaTopic() {
-        return buildTopic(startSagaTopic);
+        return buildTopic(productValidationStartTopic);
     }
 
     @Bean

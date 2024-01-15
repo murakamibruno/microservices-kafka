@@ -7,6 +7,7 @@ import br.com.microservices.choreography.inventoryservice.core.dto.Order;
 import br.com.microservices.choreography.inventoryservice.core.dto.OrderProducts;
 import br.com.microservices.choreography.inventoryservice.core.enums.ESagaStatus;
 import br.com.microservices.choreography.inventoryservice.core.producer.InventoryProducer;
+import br.com.microservices.choreography.inventoryservice.core.saga.SagaExecutionController;
 import br.com.microservices.choreography.inventoryservice.core.utils.JsonUtil;
 import br.com.microservices.choreography.inventoryservice.core.model.Inventory;
 import br.com.microservices.choreography.inventoryservice.core.model.OrderInventory;
@@ -25,10 +26,9 @@ public class InventoryService {
 
     private static final String CURRENT_SOURCE="INVENTORY_SERVICE";
 
-    private final JsonUtil jsonUtil;
-    private final InventoryProducer producer;
     private final InventoryRepository inventoryRepository;
     private final OrderInventoryRepository orderInventoryRepository;
+    private final SagaExecutionController sagaExecutionController;
 
     public void updateInventory(Event event) {
         try {
@@ -40,7 +40,7 @@ public class InventoryService {
             log.error("Error trying to update inventory: ", ex);
             handleFailCurrentNotExecuted(event,ex.getMessage());
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+        sagaExecutionController.handleSaga(event);
     }
 
     private void checkCurrentValidation(Event event) {
@@ -127,7 +127,7 @@ public class InventoryService {
         } catch (Exception ex) {
             addHistory(event, "Rollback not executed for inventory: ".concat(ex.getMessage()));
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+        sagaExecutionController.handleSaga(event);
     }
 
     private void returnInventoryToPreviousValues(Event event) {

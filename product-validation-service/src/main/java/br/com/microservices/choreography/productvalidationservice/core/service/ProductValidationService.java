@@ -6,6 +6,7 @@ import br.com.microservices.choreography.productvalidationservice.core.dto.Histo
 import br.com.microservices.choreography.productvalidationservice.core.model.Validation;
 import br.com.microservices.choreography.productvalidationservice.core.producer.ProductValidationProducer;
 import br.com.microservices.choreography.productvalidationservice.core.repository.ValidationRepository;
+import br.com.microservices.choreography.productvalidationservice.core.saga.SagaExecutionController;
 import br.com.microservices.choreography.productvalidationservice.core.utils.JsonUtil;
 import br.com.microservices.choreography.productvalidationservice.core.dto.OrderProducts;
 import br.com.microservices.choreography.productvalidationservice.core.repository.ProductRepository;
@@ -26,10 +27,9 @@ public class ProductValidationService {
 
     private static final String CURRENT_SOURCE="PRODUCT_VALIDATION_SERVICE";
 
-    private final JsonUtil jsonUtil;
-    private final ProductValidationProducer producer;
     private final ProductRepository productRepository;
     private final ValidationRepository validationRepository;
+    private final SagaExecutionController sagaExecutionController;
 
     public void validateExistingProduct(Event event) {
         try {
@@ -40,7 +40,7 @@ public class ProductValidationService {
             log.error("Error trying to validate products: ", ex);
             handleFailCurrentNotExecuted(event, ex.getMessage());
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+        sagaExecutionController.handleSaga(event);
     }
 
     private void checkCurrentValidation(Event event) {
@@ -114,7 +114,7 @@ public class ProductValidationService {
         event.setStatus(FAIL);
         event.setSource(CURRENT_SOURCE);
         addHistory(event, "Rollback executed on product validation!");
-        producer.sendEvent(jsonUtil.toJson(event));
+        sagaExecutionController.handleSaga(event);
     }
 
     private void changeValidationToFail(Event event) {

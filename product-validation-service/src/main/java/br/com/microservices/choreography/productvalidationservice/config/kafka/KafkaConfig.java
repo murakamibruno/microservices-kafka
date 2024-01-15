@@ -30,14 +30,14 @@ public class KafkaConfig {
     private String groupId;
     @Value("${spring.kafka.consumer.auto-offset-reset}")
     private String autoOffsetReset;
-    @Value("${spring.kafka.topic.product-validation-success}")
+    @Value("${spring.kafka.topic.product-validation-start}")
     private String productValidationStartTopic;
     @Value("${spring.kafka.topic.product-validation-fail}")
     private String productValidationFailTopic;
     @Value("${spring.kafka.topic.notify-ending}")
     private String notifyEndingTopic;
     @Value("${spring.kafka.topic.payment-success}")
-    private String paymentSuccessFailTopic;
+    private String paymentSuccessTopic;
 
     private Map<String, Object> consumerProps() {
         var props = new HashMap<String, Object>();
@@ -76,7 +76,7 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic productValidationSuccessTopic() {
+    public NewTopic productValidationStartTopic() {
         return buildTopic(productValidationStartTopic);
     }
 
@@ -91,8 +91,8 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic paymentSuccessFailTopic() {
-        return buildTopic(paymentSuccessFailTopic);
+    public NewTopic paymentSuccessTopic() {
+        return buildTopic(paymentSuccessTopic);
     }
 
 }

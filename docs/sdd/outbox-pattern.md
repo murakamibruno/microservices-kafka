@@ -222,6 +222,38 @@ um único nó.
 compose (seção 6.3). O `keyFile` é regenerado a cada start, o que é seguro com um único membro.
 Os testes de integração não são afetados (`MongoDBContainer` do Testcontainers sobe sem auth).
 
+### ADR-08 — Localização da tabela e reuso de código do outbox
+
+**Tabela:** cada serviço tem **seu próprio** outbox/inbox, no **seu próprio** banco. A atomicidade
+do padrão depende de a mensagem ser gravada na mesma transação local dos dados de negócio, e uma
+transação Postgres não atravessa bancos distintos.
+
+Alternativas descartadas:
+
+| Alternativa | Motivo do descarte |
+|-------------|--------------------|
+| Tabela outbox única em banco separado | Volta a ser *dual write* (duas transações independentes); exigiria 2PC/XA. |
+| Banco único com schema por serviço + schema `outbox` comum | Funciona tecnicamente, mas quebra *database-per-service*: acopla disponibilidade, migrations e deploys dos três serviços e transforma a tabela em ponto de acoplamento. Além disso, só eliminaria a duplicação do relay, não do código de escrita. |
+| Spring Modulith (event publication registry + externalização para Kafka) | Elimina código próprio, mas as garantias de retry/reenvio e de chave/ordenação diferem do especificado aqui e precisariam ser revalidadas; reduz também o valor didático da implementação. |
+
+**Código:** nesta entrega o código de outbox/inbox é **duplicado** em cada serviço, seguindo o
+padrão atual do repositório (que já duplica `Event`, `Order`, `History`, `JsonUtil`, `KafkaConfig`).
+Os três serviços Postgres terão implementações praticamente idênticas (mudando apenas o pacote);
+o `order-service` terá a variante Mongo (claim via `findAndModify`).
+
+Para reduzir divergência entre as cópias:
+- O `payment-service` (piloto, fase 1) é a **implementação de referência**; as fases 2 e 3
+  replicam a partir dele.
+- Mesmos nomes de classes, pacotes (`core/outbox`, `core/inbox`) e propriedades (`outbox.*`) em
+  todos os serviços.
+- Os mesmos testes de integração são replicados em cada serviço.
+
+**Evolução prevista** (alinhada à prática de mercado):
+1. Extrair um módulo `outbox-starter` (Gradle multi-módulo ou lib publicada), que pode absorver
+   também os DTOs hoje duplicados.
+2. Migrar o relay para CDC (Debezium + Kafka Connect, ADR-01), reduzindo o código no serviço a
+   um `INSERT` no outbox.
+
 ## 6. Design detalhado
 
 ### 6.1 Visão geral
@@ -635,9 +667,9 @@ as escritas parciais é uma melhoria possível, mas fora do escopo.
 
 ### Código compartilhado
 
-Os cinco serviços duplicam DTOs e utilitários. Para não ampliar o escopo, o código de
-outbox/inbox será **duplicado** nos três serviços Postgres, seguindo o padrão atual do repositório.
-A extração para um módulo comum (`outbox-starter`) fica registrada como melhoria.
+Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nesta entrega, tendo o
+`payment-service` como implementação de referência. A extração para um módulo comum
+(`outbox-starter`) fica registrada como evolução.
 
 ## 8. Observabilidade
 
@@ -684,7 +716,7 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 | 3 | `docker-compose` com Mongo replica set + Outbox no `order-service`. | Fase 1 |
 | 4 | Orquestrador: chave, headers, `message-id` determinístico, error handler + DLT. | Fase 0 |
 | 5 | Observabilidade (actuator/métricas), job de limpeza, testes de caos, atualização do README. | Fases 2–4 |
-| Futuro | Módulo compartilhado `outbox-starter`; migração do relay para Debezium; Kafka Transactions no orquestrador. | — |
+| Futuro | Módulo compartilhado `outbox-starter` (ADR-08); migração do relay para Debezium; Kafka Transactions no orquestrador. | — |
 
 ## 12. Riscos e questões em aberto
 
@@ -695,7 +727,7 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 | R3 | Mensagem `FAILED` deixa a saga travada. | Alerta em `outbox.failed.count > 0` e endpoint de retry. |
 | R4 | `ddl-auto: create-drop` apaga o outbox a cada restart, contrariando G2. | **Decidido:** Flyway + `ddl-auto: validate` nesta entrega (ADR-06). |
 | R5 | Replica set com autenticação exige `keyFile`. | **Decidido:** manter autenticação e gerar o `keyFile` no entrypoint do container (ADR-07). |
-| R6 | Duplicação de código de outbox em 3–4 serviços. | **Q3:** aceitar duplicação agora ou criar módulo Gradle compartilhado? |
+| R6 | Duplicação de código de outbox em 3–4 serviços. | **Decidido:** duplicar nesta entrega, com `payment-service` como referência e mesma estrutura/testes em todos os serviços; módulo compartilhado como evolução (ADR-08). |
 | R7 | Reprocessamento do orquestrador pode publicar duplicado entre `send` e commit do offset. | Coberto pelo Inbox downstream (ADR-03/04). |
 
 ## 13. Referências

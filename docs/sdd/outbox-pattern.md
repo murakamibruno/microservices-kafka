@@ -168,6 +168,46 @@ Hoje os tópicos têm 1 partição e as mensagens são publicadas **sem chave**.
 instante, portanto não há necessidade de ordem global — apenas por chave, que o Kafka já garante
 dentro da partição. Isso permite aumentar partições e instâncias no futuro sem quebrar a saga.
 
+### ADR-06 — Versionamento de schema com Flyway
+
+Hoje os serviços Postgres usam `ddl-auto: create-drop`: o Hibernate **apaga e recria** todas as
+tabelas a cada restart e o seed vem de `import.sql`. Isso contradiz o G2, porque mensagens
+`PENDING` no outbox sumiriam num restart.
+
+**Decisão:** adotar Flyway **nesta entrega** em `product-validation-service`, `payment-service` e
+`inventory-service`, com `spring.jpa.hibernate.ddl-auto: validate`.
+
+| Migration | Conteúdo |
+|-----------|----------|
+| `V1__baseline.sql` | Tabelas atuais (`product`, `validation` / `payment` / `inventory`, `order_inventory`), equivalentes ao que o Hibernate gera hoje. |
+| `V2__create_outbox_inbox.sql` | `outbox_message`, `inbox_message` e índice (seção 6.2). |
+| `V3__seed_data.sql` | Conteúdo dos `import.sql` atuais (`product`, `inventory`), seguido de `setval` nas sequências de identidade. O `import.sql` é removido. |
+
+Configuração:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+```
+
+```groovy
+implementation 'org.flywaydb:flyway-core'
+implementation 'org.flywaydb:flyway-database-postgresql'
+```
+
+Consequências:
+- Os dados passam a **sobreviver ao restart do serviço** (estoque e pagamentos inclusive). Como os
+  containers Postgres do compose não têm volume, `docker compose down` continua zerando o
+  ambiente.
+- O `order-service` (Mongo) não usa Flyway. A coleção `outbox` e seus índices são criados no
+  startup via `@CompoundIndex` com `spring.data.mongodb.auto-index-creation: true` (o índice TTL
+  via `@Indexed(expireAfter = ...)`).
+
 ## 6. Design detalhado
 
 ### 6.1 Visão geral
@@ -228,8 +268,9 @@ CREATE TABLE inbox_message (
 );
 ```
 
-> Os serviços usam `ddl-auto: create-drop`; as entidades JPA abaixo geram estas tabelas. O índice
-> deve ser declarado via `@Table(indexes = ...)`. A adoção de Flyway fica como melhoria (seção 11).
+> O schema passa a ser versionado com **Flyway** (ADR-06): o SQL acima é a migration
+> `V2__create_outbox_inbox.sql` de cada serviço Postgres, e o Hibernate roda com
+> `ddl-auto: validate`. O `@Table(indexes = ...)` da entidade é apenas documental.
 
 Entidade (exemplo para `payment-service`, replicada nos outros):
 
@@ -521,6 +562,8 @@ as escritas parciais é uma melhoria possível, mas fora do escopo.
   `org.springframework.data.annotation.Id` (funciona hoje apenas pela convenção do campo `id`).
 
 ### `product-validation-service`, `payment-service`, `inventory-service` (Postgres)
+- Flyway (ADR-06): dependências, migrations `V1`–`V3` em `src/main/resources/db/migration`,
+  `ddl-auto: validate` e remoção do `import.sql`.
 - Entidades `OutboxMessage` e `InboxMessage` + repositórios.
 - Métodos públicos dos services (`validateExistingProduct`, `rollbackEvent`, `realizePayment`,
   `realizeRefund`, `updateInventory`, `rollbackInventory`) → `@Transactional`, iniciam por
@@ -583,13 +626,14 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 
 | Fase | Entrega | Dependências |
 |------|---------|--------------|
+| 0 | Flyway + `ddl-auto: validate` nos três serviços Postgres (`V1` baseline + `V3` seed), sem mudança funcional. | — |
 | 0 | Producers idempotentes + envio síncrono com propagação de erro em **todos** os serviços (mitiga P2 imediatamente). | — |
-| 1 | Outbox + Inbox no `payment-service` (serviço piloto) + testes de integração. | Fase 0 |
+| 1 | Outbox + Inbox no `payment-service` (serviço piloto, migration `V2`) + testes de integração. | Fase 0 |
 | 2 | Replicar em `product-validation-service` e `inventory-service`. | Fase 1 |
 | 3 | `docker-compose` com Mongo replica set + Outbox no `order-service`. | Fase 1 |
 | 4 | Orquestrador: chave, headers, `message-id` determinístico, error handler + DLT. | Fase 0 |
 | 5 | Observabilidade (actuator/métricas), job de limpeza, testes de caos, atualização do README. | Fases 2–4 |
-| Futuro | Flyway; módulo compartilhado `outbox-starter`; migração do relay para Debezium; Kafka Transactions no orquestrador. | — |
+| Futuro | Módulo compartilhado `outbox-starter`; migração do relay para Debezium; Kafka Transactions no orquestrador. | — |
 
 ## 12. Riscos e questões em aberto
 
@@ -598,7 +642,7 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 | R1 | Polling gera carga constante nos bancos. | **Decidido:** intervalo padrão de 1 s, customizável por serviço (`outbox.relay.poll-interval-ms` / `OUTBOX_POLL_INTERVAL_MS`); índice em `status = 'PENDING'`; lote limitado. |
 | R2 | Outbox crescer indefinidamente. | `OutboxCleanupJob` + retenção configurável. |
 | R3 | Mensagem `FAILED` deixa a saga travada. | Alerta em `outbox.failed.count > 0` e endpoint de retry. |
-| R4 | `ddl-auto: create-drop` apaga o outbox a cada restart, contrariando G2. | **Q1:** adotar Flyway e `ddl-auto: validate` já nesta entrega? (recomendado). |
+| R4 | `ddl-auto: create-drop` apaga o outbox a cada restart, contrariando G2. | **Decidido:** Flyway + `ddl-auto: validate` nesta entrega (ADR-06). |
 | R5 | Replica set com autenticação exige `keyFile`. | **Q2:** remover autenticação do Mongo em dev ou gerar `keyFile` no compose? |
 | R6 | Duplicação de código de outbox em 3–4 serviços. | **Q3:** aceitar duplicação agora ou criar módulo Gradle compartilhado? |
 | R7 | Reprocessamento do orquestrador pode publicar duplicado entre `send` e commit do offset. | Coberto pelo Inbox downstream (ADR-03/04). |

@@ -103,7 +103,7 @@ trabalho (Inbox / consumidor idempotente — seção 6).
 
 | ID | Requisito |
 |----|-----------|
-| RNF-01 | Latência adicional p95 ≤ 1 s entre commit e publicação (intervalo de polling padrão: 500 ms). |
+| RNF-01 | Intervalo de polling do relay padrão de **1 s**, customizável por serviço via `outbox.relay.poll-interval-ms` / `OUTBOX_POLL_INTERVAL_MS`. Latência adicional p95 entre commit e publicação ≤ intervalo de polling + 500 ms (≈ 1,5 s no padrão). |
 | RNF-02 | Suportar múltiplas instâncias do mesmo serviço sem publicação concorrente da mesma linha. |
 | RNF-03 | Nenhuma nova peça de infraestrutura obrigatória além de habilitar replica set no MongoDB. |
 | RNF-04 | Configuração via `application.yml` com variáveis de ambiente, seguindo o padrão atual. |
@@ -190,7 +190,7 @@ sequenceDiagram
     S->>DB: INSERT outbox (status=PENDING, payload=JSON)
     S->>DB: COMMIT
     C-->>K1: commit offset
-    loop a cada 500 ms
+    loop a cada 1 s (configurável)
         R->>DB: SELECT ... PENDING FOR UPDATE SKIP LOCKED LIMIT 100
         R->>K2: send(record).get()
         K2-->>R: ack
@@ -395,7 +395,7 @@ public class OutboxRelay {
     private final KafkaProducer<String, String> kafkaProducer;
     private final OutboxProperties props;
 
-    @Scheduled(fixedDelayString = "${outbox.relay.poll-interval-ms:500}")
+    @Scheduled(fixedDelayString = "${outbox.relay.poll-interval-ms:1000}")
     @Transactional
     public void publishPending() {
         repository.lockNextBatch(props.getBatchSize()).forEach(this::publish);
@@ -443,7 +443,7 @@ props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
 outbox:
   source: PAYMENT_SERVICE
   relay:
-    poll-interval-ms: ${OUTBOX_POLL_INTERVAL_MS:500}
+    poll-interval-ms: ${OUTBOX_POLL_INTERVAL_MS:1000}   # padrão 1 s; customizável por serviço
     batch-size: ${OUTBOX_BATCH_SIZE:100}
     send-timeout-ms: ${OUTBOX_SEND_TIMEOUT_MS:5000}
     max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
@@ -595,7 +595,7 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 
 | # | Item | Mitigação / decisão pendente |
 |---|------|------------------------------|
-| R1 | Polling a cada 500 ms gera carga constante nos bancos. | Índice parcial em `status = 'PENDING'`; intervalo configurável; lote limitado. |
+| R1 | Polling gera carga constante nos bancos. | **Decidido:** intervalo padrão de 1 s, customizável por serviço (`outbox.relay.poll-interval-ms` / `OUTBOX_POLL_INTERVAL_MS`); índice em `status = 'PENDING'`; lote limitado. |
 | R2 | Outbox crescer indefinidamente. | `OutboxCleanupJob` + retenção configurável. |
 | R3 | Mensagem `FAILED` deixa a saga travada. | Alerta em `outbox.failed.count > 0` e endpoint de retry. |
 | R4 | `ddl-auto: create-drop` apaga o outbox a cada restart, contrariando G2. | **Q1:** adotar Flyway e `ddl-auto: validate` já nesta entrega? (recomendado). |

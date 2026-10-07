@@ -208,6 +208,20 @@ Consequências:
   startup via `@CompoundIndex` com `spring.data.mongodb.auto-index-creation: true` (o índice TTL
   via `@Indexed(expireAfter = ...)`).
 
+### ADR-07 — Autenticação do MongoDB no replica set
+
+Replica set com autenticação exige `keyFile` para autenticação interna entre membros, mesmo com
+um único nó.
+
+| Opção | Resumo |
+|-------|--------|
+| A | Remover autenticação em dev. Compose mais simples, mas diverge de produção e muda URI/credenciais atuais. |
+| **B (escolhida)** | Manter `admin/123456` e gerar o `keyFile` **dentro do container** no entrypoint (`/dev/urandom` + `chmod 400` + `chown 999`). |
+
+**Decisão:** B. Mantém credenciais, README e paridade com produção; o custo são poucas linhas no
+compose (seção 6.3). O `keyFile` é regenerado a cada start, o que é seguro com um único membro.
+Os testes de integração não são afetados (`MongoDBContainer` do Testcontainers sobe sem auth).
+
 ## 6. Design detalhado
 
 ### 6.1 Visão geral
@@ -351,24 +365,58 @@ sort:   { createdAt: 1 }
 Mensagens `PROCESSING` com `lockedUntil < now` voltam a ser elegíveis (instância morreu no meio).
 Após o `ack` → `status: "SENT"`. Retenção pode usar índice TTL em `sentAt`.
 
-Infra (ADR-02) — alteração no `docker-compose.yml`:
+Infra (ADR-02 + ADR-07) — alteração no `docker-compose.yml`:
 
 ```yaml
 order-db:
   image: mongo:7
-  command: ["--replSet", "rs0", "--bind_ip_all"]
+  restart: always
+  networks:
+    - orchestrator-saga
+  environment:
+    - MONGO_INITDB_ROOT_USERNAME=admin
+    - MONGO_INITDB_ROOT_PASSWORD=123456
+    - TZ=America/Sao_Paulo
+  # Gera o keyFile dentro do container (evita problemas de permissão de bind mount no Windows/Mac)
+  entrypoint:
+    - bash
+    - -c
+    - |
+      head -c 756 /dev/urandom | base64 > /data/keyfile
+      chmod 400 /data/keyfile
+      chown 999:999 /data/keyfile
+      exec docker-entrypoint.sh "$$0" "$$@"
+  command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/keyfile"]
   healthcheck:
+    # Inicializa o replica set na primeira execução e passa a reportar saudável quando há PRIMARY
     test: >
-      mongosh --quiet -u admin -p 123456 --eval
-      "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'order-db:27017'}]}).ok }"
+      mongosh --quiet -u admin -p 123456 --authenticationDatabase admin --eval
+      "try { rs.status().myState === 1 } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'order-db:27017'}]}); false }"
     interval: 5s
     retries: 30
+  ports:
+    - "27017:27017"
+
+order-service:
+  depends_on:
+    order-db:
+      condition: service_healthy   # transações falham antes do rs.initiate()
+    kafka:
+      condition: service_started
+  environment:
+    - MONGO_DB_URI=mongodb://admin:123456@order-db:27017/?replicaSet=rs0&authSource=admin
 ```
 
-> Observação: com autenticação habilitada, replica set exige `keyFile`. Para o ambiente de
-> desenvolvimento a alternativa mais simples é subir o Mongo **sem** usuário root e ajustar
-> `MONGO_DB_URI` para `mongodb://order-db:27017/?replicaSet=rs0`. A escolha final está em
-> Questões em aberto (seção 12).
+URIs de conexão:
+
+| Onde roda o `order-service` | `MONGO_DB_URI` |
+|-----------------------------|----------------|
+| Dentro do compose | `mongodb://admin:123456@order-db:27017/?replicaSet=rs0&authSource=admin` |
+| No host (IDE), default do `application.yml` | `mongodb://admin:123456@localhost:27017/?directConnection=true&authSource=admin` |
+
+> `directConnection=true` é obrigatório a partir do host: o replica set anuncia o membro como
+> `order-db:27017`, nome que o host não resolve. Com conexão direta ao primário as transações
+> funcionam normalmente.
 
 ```java
 @Bean
@@ -551,7 +599,10 @@ as escritas parciais é uma melhoria possível, mas fora do escopo.
 ## 7. Mudanças por serviço
 
 ### `order-service` (MongoDB)
-- `docker-compose.yml`: Mongo em replica set (ADR-02) e `MONGO_DB_URI` com `replicaSet=rs0`.
+- `docker-compose.yml`: Mongo em replica set com `keyFile` gerado no entrypoint e healthcheck que
+  executa o `rs.initiate()` (ADR-02/ADR-07); `order-service` depende de `order-db` saudável;
+  `MONGO_DB_URI` com `replicaSet=rs0&authSource=admin`.
+- `application.yml`: default da URI para execução local com `directConnection=true`.
 - Registrar `MongoTransactionManager`; `@EnableScheduling`.
 - `OrderService.createOrder` → `@Transactional`; grava `order`, `event` e `outbox` (tópico
   `start-saga`). `SagaProducer` deixa de ser usado pelo service e é removido (a publicação passa a
@@ -643,7 +694,7 @@ A extração para um módulo comum (`outbox-starter`) fica registrada como melho
 | R2 | Outbox crescer indefinidamente. | `OutboxCleanupJob` + retenção configurável. |
 | R3 | Mensagem `FAILED` deixa a saga travada. | Alerta em `outbox.failed.count > 0` e endpoint de retry. |
 | R4 | `ddl-auto: create-drop` apaga o outbox a cada restart, contrariando G2. | **Decidido:** Flyway + `ddl-auto: validate` nesta entrega (ADR-06). |
-| R5 | Replica set com autenticação exige `keyFile`. | **Q2:** remover autenticação do Mongo em dev ou gerar `keyFile` no compose? |
+| R5 | Replica set com autenticação exige `keyFile`. | **Decidido:** manter autenticação e gerar o `keyFile` no entrypoint do container (ADR-07). |
 | R6 | Duplicação de código de outbox em 3–4 serviços. | **Q3:** aceitar duplicação agora ou criar módulo Gradle compartilhado? |
 | R7 | Reprocessamento do orquestrador pode publicar duplicado entre `send` e commit do offset. | Coberto pelo Inbox downstream (ADR-03/04). |
 

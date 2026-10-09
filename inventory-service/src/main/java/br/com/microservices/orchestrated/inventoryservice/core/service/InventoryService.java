@@ -14,6 +14,7 @@ import br.com.microservices.orchestrated.inventoryservice.core.utils.JsonUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 
@@ -30,12 +31,15 @@ public class InventoryService {
     private final InventoryProducer producer;
     private final InventoryRepository inventoryRepository;
     private final OrderInventoryRepository orderInventoryRepository;
+    private final TransactionTemplate transactionTemplate;
 
     public void updateInventory(Event event) {
         try {
-            checkCurrentValidation(event);
-            createOrderInventory(event);
-            updateInventory(event.getPayload());
+            transactionTemplate.executeWithoutResult(status -> {
+                checkCurrentValidation(event);
+                createOrderInventory(event);
+                updateInventory(event.getPayload());
+            });
             handleSuccess(event);
         } catch (Exception ex) {
             log.error("Error trying to update inventory: ", ex);
@@ -84,16 +88,10 @@ public class InventoryService {
             .getProducts()
             .forEach(product -> {
                 var inventory = findInventoryByProductCode(product.getProduct().getCode());
-                checkInventory(inventory.getAvailable(), product.getQuantity());
-                inventory.setAvailable(inventory.getAvailable() - product.getQuantity());
-                inventoryRepository.save(inventory);
+                if (inventoryRepository.decrementIfAvailable(inventory.getId(), product.getQuantity()) == 0) {
+                    throw new ValidationException("Product is out of stock");
+                }
             });
-    }
-
-    private void checkInventory(int available, int orderQuantity) {
-        if (orderQuantity > available) {
-            throw new ValidationException("Product is out of stock");
-        }
     }
 
     private void handleSuccess(Event event) {
@@ -132,14 +130,13 @@ public class InventoryService {
     }
 
     private void returnInventoryToPreviousValues(Event event) {
-        orderInventoryRepository
-            .findByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())
-            .forEach(orderInventory -> {
-                var inventory = orderInventory.getInventory();
-                inventory.setAvailable(orderInventory.getOldQuantity());
-                inventoryRepository.save(inventory);
-                log.info("Restored inventory for order {} from {} to {}",
-                    event.getPayload().getId(), orderInventory.getNewQuantity(), inventory.getAvailable());
-            });
+        transactionTemplate.executeWithoutResult(status ->
+            orderInventoryRepository
+                .findByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())
+                .forEach(orderInventory -> {
+                    inventoryRepository.increment(orderInventory.getInventory().getId(), orderInventory.getOrderQuantity());
+                    log.info("Restored {} unit(s) of inventory {} for order {}",
+                        orderInventory.getOrderQuantity(), orderInventory.getInventory().getId(), event.getPayload().getId());
+                }));
     }
 }

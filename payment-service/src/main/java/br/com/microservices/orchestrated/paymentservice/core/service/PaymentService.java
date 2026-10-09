@@ -6,12 +6,14 @@ import br.com.microservices.orchestrated.paymentservice.core.dto.History;
 import br.com.microservices.orchestrated.paymentservice.core.dto.OrderProducts;
 import br.com.microservices.orchestrated.paymentservice.core.enums.EPaymentStatus;
 import br.com.microservices.orchestrated.paymentservice.core.model.Payment;
-import br.com.microservices.orchestrated.paymentservice.core.producer.PaymentProducer;
+import br.com.microservices.orchestrated.paymentservice.core.inbox.InboxService;
+import br.com.microservices.orchestrated.paymentservice.core.outbox.OutboxService;
 import br.com.microservices.orchestrated.paymentservice.core.repository.PaymentRepository;
-import br.com.microservices.orchestrated.paymentservice.core.utils.JsonUtil;
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
@@ -19,36 +21,49 @@ import static br.com.microservices.orchestrated.paymentservice.core.enums.ESagaS
 
 @Service
 @Slf4j
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class PaymentService {
 
     private static final String CURRENT_SOURCE="PAYMENT_SERVICE";
     private static final Double REDUCE_SUM_VALUE = 0.0;
     private static final Double MIN_AMOUNT_VALUE = 0.1;
 
-    private final JsonUtil jsonUtil;
-    private final PaymentProducer producer;
+    private final OutboxService outboxService;
+    private final InboxService inboxService;
     private final PaymentRepository paymentRepository;
 
-    public void realizePayment(Event event) {
+    @Value("${spring.kafka.topic.orchestrator}")
+    private String orchestratorTopic;
+
+    @Transactional
+    public void realizePayment(Event event, String topic, String messageId) {
+        if (isDuplicate(event, topic, messageId)) {
+            return;
+        }
         try {
-            checkCurrentPayment(event);
             createPendingPayment(event);
             var payment = findByOrderIdAndTransactionId(event);
             validateAmount(payment.getTotalAmount());
             changePaymentToSuccess(payment);
             handleSuccess(event);
-        } catch(Exception ex) {
+        } catch (ValidationException ex) {
             log.error("Error trying to realize payment: ", ex);
-            handleFailCurrentNotExecuted(event,ex.getMessage());
+            handleFailCurrentNotExecuted(event, ex.getMessage());
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+        enqueue(event);
     }
 
-    private void checkCurrentPayment(Event event) {
-        if (paymentRepository.existsByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())) {
-            throw new ValidationException("There is another transactionId for this payment");
+    private boolean isDuplicate(Event event, String topic, String messageId) {
+        if (inboxService.register(topic, event.getTransactionId(), messageId)) {
+            return false;
         }
+        log.warn("Duplicate message ignored: topic={}, transactionId={}, messageId={}",
+            topic, event.getTransactionId(), messageId);
+        return true;
+    }
+
+    private void enqueue(Event event) {
+        outboxService.enqueue(event, orchestratorTopic, "PAYMENT_" + event.getStatus());
     }
 
     private void createPendingPayment(Event event) {
@@ -132,16 +147,20 @@ public class PaymentService {
         addHistory(event, "Fail to execute payment: ".concat(message));
     }
 
-    public void realizeRefund(Event event) {
+    @Transactional
+    public void realizeRefund(Event event, String topic, String messageId) {
+        if (isDuplicate(event, topic, messageId)) {
+            return;
+        }
         event.setStatus(FAIL);
         event.setSource(CURRENT_SOURCE);
         try {
             changePaymentStatusToRefund(event);
             addHistory(event, "Rollback executed on payment!");
-        } catch (Exception ex) {
+        } catch (ValidationException ex) {
             addHistory(event, "Rollback not executed on payment: ".concat(ex.getMessage()));
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+        enqueue(event);
     }
 
     private void changePaymentStatusToRefund(Event event) {

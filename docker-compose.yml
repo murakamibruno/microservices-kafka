@@ -1,9 +1,7 @@
-version: '3'
-
 services:
 
   order-db:
-    image: mongo:latest
+    image: mongo:7.0
     container_name: order-db
     restart: always
     networks:
@@ -77,7 +75,7 @@ services:
 
   redpanda-console:
     container_name: redpanda
-    image: docker.redpanda.com/vectorized/console:latest
+    image: docker.redpanda.com/redpandadata/console:latest
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"

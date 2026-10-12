@@ -696,14 +696,14 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 
 - [ ] CA-01 — Com o Kafka parado, `POST /api/order` retorna sucesso e o evento fica `PENDING`; ao
       religar o Kafka a saga completa e aparece em `GET /api/event`.
-- [ ] CA-02 — Exceção forçada após as escritas de negócio (antes do commit) não gera mensagem no
+- [x] CA-02 — Exceção forçada após as escritas de negócio (antes do commit) não gera mensagem no
       Kafka nem linha no outbox.
-- [ ] CA-03 — Reentrega manual de uma mensagem já processada em `payment-success` não altera o
+- [x] CA-03 — Reentrega manual de uma mensagem já processada em `payment-success` não altera o
       pagamento nem dispara rollback.
-- [ ] CA-04 — Com 2 réplicas de `payment-service`, cada mensagem do outbox é publicada exatamente
+- [x] CA-04 — Com 2 réplicas de `payment-service`, cada mensagem do outbox é publicada exatamente
       uma vez em condições normais.
-- [ ] CA-05 — Os payloads JSON publicados são idênticos ao contrato atual (teste de snapshot).
-- [ ] CA-06 — Mensagens com `maxAttempts` esgotado ficam `FAILED` e são visíveis via log/métrica.
+- [x] CA-05 — Os payloads JSON publicados são idênticos ao contrato atual (teste de snapshot).
+- [x] CA-06 — Mensagens com `maxAttempts` esgotado ficam `FAILED` e são visíveis via log/métrica.
 
 ## 11. Plano de implementação
 
@@ -711,7 +711,7 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 |------|---------|--------------|
 | 0 | Flyway + `ddl-auto: validate` nos três serviços Postgres (`V1` baseline + `V3` seed), sem mudança funcional. | — |
 | 0 | Producers idempotentes + envio síncrono com propagação de erro em **todos** os serviços (mitiga P2 imediatamente). | — |
-| 1 | Outbox + Inbox no `payment-service` (serviço piloto, migration `V2`) + testes de integração. | Fase 0 |
+| 1 | ✅ Outbox + Inbox no `payment-service` (serviço piloto, migration `V2`) + testes de integração. CA-02..06 cobertos (`PaymentOutboxIT`, `OutboxRelayTest`); CA-01 depende do teste de caos (Fase 5). | Fase 0 |
 | 2 | Replicar em `product-validation-service` e `inventory-service`. | Fase 1 |
 | 3 | `docker-compose` com Mongo replica set + Outbox no `order-service`. | Fase 1 |
 | 4 | Orquestrador: chave, headers, `message-id` determinístico, error handler + DLT. | Fase 0 |

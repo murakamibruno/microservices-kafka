@@ -7,6 +7,7 @@ import br.com.microservices.orchestrated.inventoryservice.core.enums.ESagaStatus
 import br.com.microservices.orchestrated.inventoryservice.core.inbox.InboxMessageRepository;
 import br.com.microservices.orchestrated.inventoryservice.core.outbox.EOutboxStatus;
 import br.com.microservices.orchestrated.inventoryservice.core.outbox.OutboxMessage;
+import br.com.microservices.orchestrated.inventoryservice.core.outbox.OutboxCleanupJob;
 import br.com.microservices.orchestrated.inventoryservice.core.outbox.OutboxMessageRepository;
 import br.com.microservices.orchestrated.inventoryservice.core.outbox.OutboxRelay;
 import br.com.microservices.orchestrated.inventoryservice.core.utils.JsonUtil;
@@ -31,6 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -71,6 +73,9 @@ class InventoryOutboxIT {
     @Autowired OutboxMessageRepository outboxRepository;
     @Autowired InboxMessageRepository inboxRepository;
     @Autowired OutboxRelay relay;
+    @Autowired OutboxCleanupJob cleanupJob;
+    @Autowired io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    @Autowired br.com.microservices.orchestrated.inventoryservice.core.inbox.InboxService inboxService;
     @Autowired TransactionTemplate tx;
     @Autowired JsonUtil jsonUtil;
     @Autowired ObjectMapper objectMapper;
@@ -282,6 +287,52 @@ class InventoryOutboxIT {
             }
         }
         throw new AssertionError("No record with key " + key + " on " + ORCHESTRATOR_TOPIC);
+    }
+
+    @Test
+    void cleanupRemovesOnlySentMessagesOlderThanTheRetention() {
+        var now = LocalDateTime.now();
+        outboxRepository.save(outboxSample(EOutboxStatus.SENT, now.minusHours(100), now.minusHours(100)));
+        var recentSent = outboxRepository.save(outboxSample(EOutboxStatus.SENT, now, now));
+        outboxRepository.save(outboxSample(EOutboxStatus.PENDING, now.minusHours(100), null));
+
+        cleanupJob.purgeSent();
+
+        assertThat(outboxRepository.findAll()).extracting(OutboxMessage::getId)
+            .contains(recentSent.getId()).hasSize(2);
+        assertThat(outboxRepository.findAll()).extracting(OutboxMessage::getStatus)
+            .containsExactlyInAnyOrder(EOutboxStatus.SENT, EOutboxStatus.PENDING);
+    }
+
+    @Test
+    void metricsReflectTheOutboxState() {
+        var now = LocalDateTime.now();
+        outboxRepository.save(outboxSample(EOutboxStatus.PENDING, now.minusSeconds(90), null));
+        outboxRepository.save(outboxSample(EOutboxStatus.FAILED, now, null));
+        outboxRepository.save(outboxSample(EOutboxStatus.SENT, now, now));
+
+        assertThat(meterRegistry.get("outbox.pending.count").gauge().value()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("outbox.failed.count").gauge().value()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("outbox.oldest.pending.age.seconds").gauge().value()).isGreaterThanOrEqualTo(90.0);
+    }
+
+    @Test
+    void duplicateInboxRegistrationIncrementsTheMetric() {
+        var before = meterRegistry.get("inbox.duplicates.total").counter().count();
+
+        tx.executeWithoutResult(status -> {
+            assertThat(inboxService.register("metrics-topic", "tx-metrics", "m-1")).isTrue();
+            assertThat(inboxService.register("metrics-topic", "tx-metrics", "m-2")).isFalse();
+        });
+
+        assertThat(meterRegistry.get("inbox.duplicates.total").counter().count()).isEqualTo(before + 1);
+    }
+
+    private OutboxMessage outboxSample(EOutboxStatus status, LocalDateTime createdAt, LocalDateTime sentAt) {
+        return OutboxMessage.builder()
+            .id(UUID.randomUUID()).aggregateType("TEST").aggregateId("tx-sample").eventType("TEST_EVENT")
+            .topic("orchestrator").payload("{}").status(status).attempts(0)
+            .nextAttemptAt(createdAt).createdAt(createdAt).sentAt(sentAt).build();
     }
 
 }

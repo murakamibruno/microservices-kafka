@@ -28,6 +28,15 @@ outbox:
     base-backoff-ms: 1000
     max-backoff-ms: 60000
     lease-ms: ${OUTBOX_LEASE_MS:30000}
+  cleanup:
+    cron: ${OUTBOX_CLEANUP_CRON:0 0 * * * *}
+    retention-hours: ${OUTBOX_RETENTION_HOURS:72}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
 
 logging:
   level:

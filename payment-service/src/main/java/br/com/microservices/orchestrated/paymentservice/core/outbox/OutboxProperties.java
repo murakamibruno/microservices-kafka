@@ -11,6 +11,7 @@ public class OutboxProperties {
 
     private String source;
     private Relay relay = new Relay();
+    private Cleanup cleanup = new Cleanup();
 
     @Data
     public static class Relay {
@@ -20,6 +21,11 @@ public class OutboxProperties {
         private int maxAttempts = 10;
         private long baseBackoffMs = 1000;
         private long maxBackoffMs = 60_000;
+    }
+
+    @Data
+    public static class Cleanup {
+        private long retentionHours = 72;
     }
 
 }

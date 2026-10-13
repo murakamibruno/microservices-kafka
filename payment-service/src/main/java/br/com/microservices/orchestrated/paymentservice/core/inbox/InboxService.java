@@ -1,5 +1,6 @@
 package br.com.microservices.orchestrated.paymentservice.core.inbox;
 
+import br.com.microservices.orchestrated.paymentservice.core.outbox.OutboxMetrics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -12,11 +13,16 @@ import java.time.LocalDateTime;
 public class InboxService {
 
     private final InboxMessageRepository repository;
+    private final OutboxMetrics metrics;
 
     /** @return true se a mensagem é nova e deve ser processada. */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean register(String topic, String transactionId, String messageId) {
-        return repository.insertIfAbsent(topic, transactionId, messageId, LocalDateTime.now()) == 1;
+        var isNew = repository.insertIfAbsent(topic, transactionId, messageId, LocalDateTime.now()) == 1;
+        if (!isNew) {
+            metrics.inboxDuplicate();
+        }
+        return isNew;
     }
 
 }

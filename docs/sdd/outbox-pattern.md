@@ -315,7 +315,7 @@ CREATE TABLE inbox_message (
 ```
 
 > O schema passa a ser versionado com **Flyway** (ADR-06): o SQL acima é a migration
-> `V2__create_outbox_inbox.sql` de cada serviço Postgres, e o Hibernate roda com
+> `V2__create_outbox_inbox.sql` no `payment-service` (nos demais, `V<timestamp>__create_outbox_inbox.sql`, ver Fase 2), e o Hibernate roda com
 > `ddl-auto: validate`. O `@Table(indexes = ...)` da entidade é apenas documental.
 
 Entidade (exemplo para `payment-service`, replicada nos outros):
@@ -712,7 +712,7 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 | 0 | Flyway + `ddl-auto: validate` nos três serviços Postgres (`V1` baseline + `V3` seed), sem mudança funcional. | — |
 | 0 | Producers idempotentes + envio síncrono com propagação de erro em **todos** os serviços (mitiga P2 imediatamente). | — |
 | 1 | ✅ Outbox + Inbox no `payment-service` (serviço piloto, migration `V2`) + testes de integração. CA-02..06 cobertos (`PaymentOutboxIT`, `OutboxRelayTest`); CA-01 depende do teste de caos (Fase 5). | Fase 0 |
-| 2 | Replicar em `product-validation-service` e `inventory-service`. | Fase 1 |
+| 2 | ✅ Outbox + Inbox replicados em `product-validation-service` e `inventory-service` (migration `V202610121045__create_outbox_inbox.sql`: a `V2` já estava "ocupada" pela `V3` de seed nesses bancos, então a convenção passa a ser versão por timestamp `yyyyMMddHHmm` para migrations novas, sem `out-of-order`) + `ProductValidationOutboxIT` e `InventoryOutboxIT`. Falha de negócio reverte a transação e publica `ROLLBACK_PENDING` numa segunda transação (com inbox). | Fase 1 |
 | 3 | `docker-compose` com Mongo replica set + Outbox no `order-service`. | Fase 1 |
 | 4 | Orquestrador: chave, headers, `message-id` determinístico, error handler + DLT. | Fase 0 |
 | 5 | Observabilidade (actuator/métricas), job de limpeza, testes de caos, atualização do README. | Fases 2–4 |

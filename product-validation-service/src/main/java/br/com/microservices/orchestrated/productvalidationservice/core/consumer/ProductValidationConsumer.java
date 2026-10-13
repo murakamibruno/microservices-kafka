@@ -5,6 +5,9 @@ import br.com.microservices.orchestrated.productvalidationservice.core.utils.Jso
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -19,20 +22,24 @@ public class ProductValidationConsumer {
             groupId = "${spring.kafka.consumer.group-id}",
             topics = "${spring.kafka.topic.product-validation-success}"
     )
-    public void consumeSuccessEvent(String payload) {
+    public void consumeSuccessEvent(@Payload String payload,
+                                    @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                                    @Header(name = "x-message-id", required = false) String messageId) {
         log.info("Receiving success event from {} from product-validation-success topic", payload);
         var event = jsonUtil.toEvent(payload);
-        productValidationService.validateExistingProduct(event);
+        productValidationService.validateExistingProduct(event, topic, messageId);
     }
 
     @KafkaListener(
         groupId = "${spring.kafka.consumer.group-id}",
         topics = "${spring.kafka.topic.product-validation-fail}"
     )
-    public void consumeFailEvent(String payload) {
+    public void consumeFailEvent(@Payload String payload,
+                                 @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                                 @Header(name = "x-message-id", required = false) String messageId) {
         log.info("Receiving rollback event from {} from product-validation-fail topic", payload);
         var event = jsonUtil.toEvent(payload);
-        productValidationService.rollbackEvent(event);
+        productValidationService.rollbackEvent(event, topic, messageId);
     }
 
 }

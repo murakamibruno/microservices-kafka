@@ -5,6 +5,9 @@ import br.com.microservices.orchestrated.inventoryservice.core.utils.JsonUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -19,20 +22,24 @@ public class InventoryConsumer {
             groupId = "${spring.kafka.consumer.group-id}",
             topics = "${spring.kafka.topic.inventory-success}"
     )
-    public void consumeSuccessEvent(String payload) {
+    public void consumeSuccessEvent(@Payload String payload,
+                                    @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                                    @Header(name = "x-message-id", required = false) String messageId) {
         log.info("Receiving success event from {} from inventory-success topic", payload);
         var event = jsonUtil.toEvent(payload);
-        inventoryService.updateInventory(event);
+        inventoryService.updateInventory(event, topic, messageId);
     }
 
     @KafkaListener(
         groupId = "${spring.kafka.consumer.group-id}",
         topics = "${spring.kafka.topic.inventory-fail}"
     )
-    public void consumeFailEvent(String payload) {
+    public void consumeFailEvent(@Payload String payload,
+                                 @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                                 @Header(name = "x-message-id", required = false) String messageId) {
         log.info("Receiving rollback event from {} from inventory-fail topic", payload);
         var event = jsonUtil.toEvent(payload);
-        inventoryService.rollbackInventory(event);
+        inventoryService.rollbackInventory(event, topic, messageId);
     }
 
 }

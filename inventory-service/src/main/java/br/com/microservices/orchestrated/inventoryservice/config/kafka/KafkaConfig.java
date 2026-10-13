@@ -36,6 +36,8 @@ public class KafkaConfig {
     private String inventorySuccessTopic;
     @Value("${spring.kafka.topic.inventory-fail}")
     private String inventoryFailTopic;
+    @Value("${outbox.relay.send-timeout-ms:5000}")
+    private long sendTimeoutMs;
 
     private Map<String, Object> consumerProps() {
         var props = new HashMap<String, Object>();
@@ -56,6 +58,8 @@ public class KafkaConfig {
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
         props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
+        // Sem isso, send() bloqueia até 60s esperando metadados com o broker fora do ar.
+        props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, sendTimeoutMs);
         return props;
     }
 

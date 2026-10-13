@@ -58,6 +58,8 @@ public class KafkaConfig {
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
         props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
+        // Sem isso, send() bloqueia até 60 s esperando metadata com o broker fora, estourando o lease do outbox.
+        props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5_000);
         return props;
     }
 

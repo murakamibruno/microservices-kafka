@@ -10,6 +10,24 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=123456
       - TZ=America/Sao_Paulo
+    # Gera o keyFile dentro do container (evita problemas de permissão de bind mount)
+    entrypoint:
+      - bash
+      - -c
+      - |
+        head -c 756 /dev/urandom | base64 > /data/keyfile
+        chmod 400 /data/keyfile
+        chown 999:999 /data/keyfile
+        exec docker-entrypoint.sh "$$0" "$$@"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/keyfile"]
+    healthcheck:
+      # Inicializa o replica set na primeira execução e só fica saudável quando há PRIMARY
+      test: >
+        mongosh --quiet -u admin -p 123456 --authenticationDatabase admin --eval
+        "try { quit(rs.status().myState === 1 ? 0 : 1) } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'order-db:27017'}]}); quit(1) }"
+      interval: 5s
+      timeout: 10s
+      retries: 30
     ports:
       - "27017:27017"
 
@@ -95,13 +113,15 @@ services:
     build: './order-service'
     container_name: order-service
     depends_on:
-      - order-db
-      - kafka
+      order-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
     networks:
       - orchestrator-saga
     environment:
       - KAFKA_BROKER=kafka:29092
-      - MONGO_DB_URI=mongodb://admin:123456@order-db:27017
+      - MONGO_DB_URI=mongodb://admin:123456@order-db:27017/?replicaSet=rs0&authSource=admin
       - TZ=America/Sao_Paulo
     ports:
       - "3000:3000"

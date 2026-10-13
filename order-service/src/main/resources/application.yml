@@ -15,7 +15,19 @@ spring:
   data:
     mongodb:
       database: admin
-      uri: ${MONGO_DB_URI:mongodb://admin:123456@localhost:27017}
+      uri: ${MONGO_DB_URI:mongodb://admin:123456@localhost:27017/?directConnection=true&authSource=admin}
+      auto-index-creation: true
+
+outbox:
+  source: ORDER_SERVICE
+  relay:
+    poll-interval-ms: ${OUTBOX_POLL_INTERVAL_MS:1000}
+    batch-size: ${OUTBOX_BATCH_SIZE:100}
+    send-timeout-ms: ${OUTBOX_SEND_TIMEOUT_MS:5000}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
+    base-backoff-ms: 1000
+    max-backoff-ms: 60000
+    lease-ms: ${OUTBOX_LEASE_MS:30000}
 
 logging:
   level:

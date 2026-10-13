@@ -7,12 +7,13 @@ import br.com.microservices.orchestrated.inventoryservice.core.dto.Order;
 import br.com.microservices.orchestrated.inventoryservice.core.dto.OrderProducts;
 import br.com.microservices.orchestrated.inventoryservice.core.model.Inventory;
 import br.com.microservices.orchestrated.inventoryservice.core.model.OrderInventory;
-import br.com.microservices.orchestrated.inventoryservice.core.producer.InventoryProducer;
+import br.com.microservices.orchestrated.inventoryservice.core.inbox.InboxService;
+import br.com.microservices.orchestrated.inventoryservice.core.outbox.OutboxService;
 import br.com.microservices.orchestrated.inventoryservice.core.repository.InventoryRepository;
 import br.com.microservices.orchestrated.inventoryservice.core.repository.OrderInventoryRepository;
-import br.com.microservices.orchestrated.inventoryservice.core.utils.JsonUtil;
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -22,30 +23,59 @@ import static br.com.microservices.orchestrated.inventoryservice.core.enums.ESag
 
 @Service
 @Slf4j
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class InventoryService {
 
     private static final String CURRENT_SOURCE="INVENTORY_SERVICE";
 
-    private final JsonUtil jsonUtil;
-    private final InventoryProducer producer;
+    private final OutboxService outboxService;
+    private final InboxService inboxService;
     private final InventoryRepository inventoryRepository;
     private final OrderInventoryRepository orderInventoryRepository;
     private final TransactionTemplate transactionTemplate;
 
-    public void updateInventory(Event event) {
+    @Value("${spring.kafka.topic.orchestrator}")
+    private String orchestratorTopic;
+
+    public void updateInventory(Event event, String topic, String messageId) {
         try {
             transactionTemplate.executeWithoutResult(status -> {
+                if (isDuplicate(event, topic, messageId)) {
+                    return;
+                }
                 checkCurrentValidation(event);
                 createOrderInventory(event);
                 updateInventory(event.getPayload());
+                handleSuccess(event);
+                enqueue(event);
             });
-            handleSuccess(event);
         } catch (Exception ex) {
             log.error("Error trying to update inventory: ", ex);
-            handleFailCurrentNotExecuted(event,ex.getMessage());
+            // A transação de negócio foi revertida (inbox incluso): o evento de falha vai numa nova transação.
+            handleFailCurrentNotExecuted(event, ex.getMessage());
+            enqueueOnce(event, topic, messageId);
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+    }
+
+    private boolean isDuplicate(Event event, String topic, String messageId) {
+        if (inboxService.register(topic, event.getTransactionId(), messageId)) {
+            return false;
+        }
+        log.warn("Duplicate message ignored: topic={}, transactionId={}, messageId={}",
+            topic, event.getTransactionId(), messageId);
+        return true;
+    }
+
+    private void enqueue(Event event) {
+        outboxService.enqueue(event, orchestratorTopic, "INVENTORY_" + event.getStatus());
+    }
+
+    private void enqueueOnce(Event event, String topic, String messageId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            if (!isDuplicate(event, topic, messageId)) {
+                enqueue(event);
+            }
+        });
     }
 
     private void checkCurrentValidation(Event event) {
@@ -117,26 +147,32 @@ public class InventoryService {
         addHistory(event, "Fail to update inventory: ".concat(message));
     }
 
-    public void rollbackInventory(Event event) {
+    public void rollbackInventory(Event event, String topic, String messageId) {
         event.setStatus(FAIL);
         event.setSource(CURRENT_SOURCE);
         try {
-            returnInventoryToPreviousValues(event);
-            addHistory(event, "Rollback executed for inventory!");
+            transactionTemplate.executeWithoutResult(status -> {
+                if (isDuplicate(event, topic, messageId)) {
+                    return;
+                }
+                returnInventoryToPreviousValues(event);
+                addHistory(event, "Rollback executed for inventory!");
+                enqueue(event);
+            });
         } catch (Exception ex) {
-            addHistory(event, "Rollback not executed for inventory: ".concat(ex.getMessage()));
+            log.error("Error trying to rollback inventory: ", ex);
+            addHistory(event, "Rollback not executed for inventory: ".concat(String.valueOf(ex.getMessage())));
+            enqueueOnce(event, topic, messageId);
         }
-        producer.sendEvent(jsonUtil.toJson(event));
     }
 
     private void returnInventoryToPreviousValues(Event event) {
-        transactionTemplate.executeWithoutResult(status ->
-            orderInventoryRepository
-                .findByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())
-                .forEach(orderInventory -> {
-                    inventoryRepository.increment(orderInventory.getInventory().getId(), orderInventory.getOrderQuantity());
-                    log.info("Restored {} unit(s) of inventory {} for order {}",
-                        orderInventory.getOrderQuantity(), orderInventory.getInventory().getId(), event.getPayload().getId());
-                }));
+        orderInventoryRepository
+            .findByOrderIdAndTransactionId(event.getPayload().getId(), event.getTransactionId())
+            .forEach(orderInventory -> {
+                inventoryRepository.increment(orderInventory.getInventory().getId(), orderInventory.getOrderQuantity());
+                log.info("Restored {} unit(s) of inventory {} for order {}",
+                    orderInventory.getOrderQuantity(), orderInventory.getInventory().getId(), event.getPayload().getId());
+            });
     }
 }

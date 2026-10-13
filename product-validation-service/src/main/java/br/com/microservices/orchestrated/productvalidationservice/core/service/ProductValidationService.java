@@ -5,13 +5,16 @@ import br.com.microservices.orchestrated.productvalidationservice.core.dto.Event
 import br.com.microservices.orchestrated.productvalidationservice.core.dto.History;
 import br.com.microservices.orchestrated.productvalidationservice.core.dto.OrderProducts;
 import br.com.microservices.orchestrated.productvalidationservice.core.model.Validation;
-import br.com.microservices.orchestrated.productvalidationservice.core.producer.ProductValidationProducer;
+import br.com.microservices.orchestrated.productvalidationservice.core.inbox.InboxService;
+import br.com.microservices.orchestrated.productvalidationservice.core.outbox.OutboxService;
 import br.com.microservices.orchestrated.productvalidationservice.core.repository.ProductRepository;
 import br.com.microservices.orchestrated.productvalidationservice.core.repository.ValidationRepository;
-import br.com.microservices.orchestrated.productvalidationservice.core.utils.JsonUtil;
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 
@@ -21,26 +24,54 @@ import static org.springframework.util.ObjectUtils.isEmpty;
 
 @Service
 @Slf4j
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class ProductValidationService {
 
     private static final String CURRENT_SOURCE="PRODUCT_VALIDATION_SERVICE";
 
-    private final JsonUtil jsonUtil;
-    private final ProductValidationProducer producer;
+    private final OutboxService outboxService;
+    private final InboxService inboxService;
     private final ProductRepository productRepository;
     private final ValidationRepository validationRepository;
+    private final TransactionTemplate transactionTemplate;
 
-    public void validateExistingProduct(Event event) {
+    @Value("${spring.kafka.topic.orchestrator}")
+    private String orchestratorTopic;
+
+    public void validateExistingProduct(Event event, String topic, String messageId) {
         try {
-            checkCurrentValidation(event);
-            createValidation(event, true);
-            handleSuccess(event);
+            transactionTemplate.executeWithoutResult(status -> {
+                if (isDuplicate(event, topic, messageId)) {
+                    return;
+                }
+                checkCurrentValidation(event);
+                createValidation(event, true);
+                handleSuccess(event);
+                enqueue(event);
+            });
         } catch (Exception ex) {
             log.error("Error trying to validate products: ", ex);
+            // A transação de negócio foi revertida (inbox incluso): o evento de falha vai numa nova transação.
             handleFailCurrentNotExecuted(event, ex.getMessage());
+            transactionTemplate.executeWithoutResult(status -> {
+                if (!isDuplicate(event, topic, messageId)) {
+                    enqueue(event);
+                }
+            });
         }
-        producer.sendEvent(jsonUtil.toJson(event));
+    }
+
+    private boolean isDuplicate(Event event, String topic, String messageId) {
+        if (inboxService.register(topic, event.getTransactionId(), messageId)) {
+            return false;
+        }
+        log.warn("Duplicate message ignored: topic={}, transactionId={}, messageId={}",
+            topic, event.getTransactionId(), messageId);
+        return true;
+    }
+
+    private void enqueue(Event event) {
+        outboxService.enqueue(event, orchestratorTopic, "PRODUCT_VALIDATION_" + event.getStatus());
     }
 
     private void checkCurrentValidation(Event event) {
@@ -109,12 +140,16 @@ public class ProductValidationService {
         addHistory(event, "Fail to validate products: ".concat(message));
     }
 
-    public void rollbackEvent(Event event) {
+    @Transactional
+    public void rollbackEvent(Event event, String topic, String messageId) {
+        if (isDuplicate(event, topic, messageId)) {
+            return;
+        }
         changeValidationToFail(event);
         event.setStatus(FAIL);
         event.setSource(CURRENT_SOURCE);
         addHistory(event, "Rollback executed on product validation!");
-        producer.sendEvent(jsonUtil.toJson(event));
+        enqueue(event);
     }
 
     private void changeValidationToFail(Event event) {

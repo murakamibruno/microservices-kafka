@@ -1,5 +1,6 @@
 package br.com.microservices.orchestrated.orchestratorservice.config.kafka;
 
+import br.com.microservices.orchestrated.orchestratorservice.config.exception.ValidationException;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -13,6 +14,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -31,6 +36,13 @@ public class KafkaConfig {
     private String groupId;
     @Value("${spring.kafka.consumer.auto-offset-reset}")
     private String autoOffsetReset;
+
+    @Value("${spring.kafka.error-handler.max-retries:5}")
+    private int maxRetries;
+    @Value("${spring.kafka.error-handler.initial-interval-ms:1000}")
+    private long initialIntervalMs;
+    @Value("${spring.kafka.error-handler.max-interval-ms:10000}")
+    private long maxIntervalMs;
 
     private Map<String, Object> consumerProps() {
         var props = new HashMap<String, Object>();
@@ -51,7 +63,24 @@ public class KafkaConfig {
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
         props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
+        // Sem isso, send() bloqueia até 60 s esperando metadata com o broker fora.
+        props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5_000);
         return props;
+    }
+
+    /**
+     * Reprocessa com backoff exponencial (sem commitar o offset) e, esgotadas as tentativas,
+     * publica a mensagem em {@code <topic>.DLT} (ADR-03).
+     */
+    @Bean
+    public DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> template) {
+        var backOff = new ExponentialBackOffWithMaxRetries(maxRetries);
+        backOff.setInitialInterval(initialIntervalMs);
+        backOff.setMultiplier(2.0);
+        backOff.setMaxInterval(maxIntervalMs);
+        var handler = new DefaultErrorHandler(new DeadLetterPublishingRecoverer(template), backOff);
+        handler.addNotRetryableExceptions(IllegalArgumentException.class, ValidationException.class);
+        return handler;
     }
 
     @Bean
@@ -125,6 +154,26 @@ public class KafkaConfig {
     @Bean
     public NewTopic notifyEndingTopic() {
         return buildTopic(NOTIFY_ENDING.getTopic());
+    }
+
+    @Bean
+    public NewTopic startSagaDltTopic() {
+        return buildTopic(START_SAGA.getTopic() + ".DLT");
+    }
+
+    @Bean
+    public NewTopic orchestratorDltTopic() {
+        return buildTopic(BASE_ORCHESTRATOR.getTopic() + ".DLT");
+    }
+
+    @Bean
+    public NewTopic finishSuccessDltTopic() {
+        return buildTopic(FINISH_SUCCESS.getTopic() + ".DLT");
+    }
+
+    @Bean
+    public NewTopic finishFailDltTopic() {
+        return buildTopic(FINISH_FAIL.getTopic() + ".DLT");
     }
 
 }

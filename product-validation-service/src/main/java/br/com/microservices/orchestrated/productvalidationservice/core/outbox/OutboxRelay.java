@@ -24,6 +24,7 @@ public class OutboxRelay {
     private final OutboxMessageRepository repository;
     private final KafkaProducer<String, String> kafkaProducer;
     private final OutboxProperties props;
+    private final OutboxMetrics metrics;
 
     @Scheduled(fixedDelayString = "${outbox.relay.poll-interval-ms:1000}")
     @Transactional
@@ -48,6 +49,7 @@ public class OutboxRelay {
             message.setSentAt(LocalDateTime.now());
             log.info("Outbox message {} published to {} (transactionId={}, attempts={})",
                 message.getId(), message.getTopic(), message.getAggregateId(), message.getAttempts());
+            metrics.published();
             return true;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -60,6 +62,7 @@ public class OutboxRelay {
     }
 
     private void registerFailure(OutboxMessage message, Exception ex) {
+        metrics.publishFailed();
         message.setAttempts(message.getAttempts() + 1);
         message.setLastError(truncate(String.valueOf(ex.getMessage())));
         message.setNextAttemptAt(LocalDateTime.now().plus(backoff(message.getAttempts())));

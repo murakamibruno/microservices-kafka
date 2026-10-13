@@ -1,5 +1,6 @@
 package br.com.microservices.orchestrated.paymentservice.core.outbox;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -32,7 +33,7 @@ class OutboxRelayTest {
         props = new OutboxProperties();
         props.setSource("PAYMENT_SERVICE");
         props.getRelay().setMaxAttempts(3);
-        relay = new OutboxRelay(repository, producer, props);
+        relay = new OutboxRelay(repository, producer, props, new OutboxMetrics(new SimpleMeterRegistry(), repository));
     }
 
     private OutboxMessage message(int attempts) {

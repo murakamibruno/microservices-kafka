@@ -1,5 +1,6 @@
 package br.com.microservices.orchestrated.orderservice.core.inbox;
 
+import br.com.microservices.orchestrated.orderservice.core.outbox.OutboxMetrics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -16,6 +17,7 @@ import java.time.LocalDateTime;
 public class InboxService {
 
     private final MongoTemplate mongo;
+    private final OutboxMetrics metrics;
 
     /**
      * Upsert com $setOnInsert: se o documento já existe nada é escrito. Evita o insert com
@@ -34,7 +36,11 @@ public class InboxService {
                 .setOnInsert("messageId", messageId)
                 .setOnInsert("processedAt", LocalDateTime.now()),
             InboxMessage.class);
-        return result.getUpsertedId() != null;
+        var isNew = result.getUpsertedId() != null;
+        if (!isNew) {
+            metrics.inboxDuplicate();
+        }
+        return isNew;
     }
 
 }

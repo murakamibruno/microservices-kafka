@@ -2,7 +2,7 @@
 
 | Campo        | Valor                                                     |
 |--------------|-----------------------------------------------------------|
-| Status       | Proposta (rascunho para revisão)                          |
+| Status       | Implementado (Fases 0–5)                                  |
 | Autor        | Bruno Murakami                                            |
 | Data         | 2026-10-07                                                |
 | Escopo       | `order-service`, `product-validation-service`, `payment-service`, `inventory-service`, `orchestrator-service` |
@@ -694,7 +694,7 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 
 ## 10. Critérios de aceite
 
-- [ ] CA-01 — Com o Kafka parado, `POST /api/order` retorna sucesso e o evento fica `PENDING`; ao
+- [x] CA-01 — Com o Kafka parado, `POST /api/order` retorna sucesso e o evento fica `PENDING`; ao
       religar o Kafka a saga completa e aparece em `GET /api/event`.
 - [x] CA-02 — Exceção forçada após as escritas de negócio (antes do commit) não gera mensagem no
       Kafka nem linha no outbox.
@@ -715,7 +715,7 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 | 2 | ✅ Outbox + Inbox replicados em `product-validation-service` e `inventory-service` (migration `V202610121045__create_outbox_inbox.sql`: a `V2` já estava "ocupada" pela `V3` de seed nesses bancos, então a convenção passa a ser versão por timestamp `yyyyMMddHHmm` para migrations novas, sem `out-of-order`) + `ProductValidationOutboxIT` e `InventoryOutboxIT`. Falha de negócio reverte a transação e publica `ROLLBACK_PENDING` numa segunda transação (com inbox). | Fase 1 |
 | 3 | ✅ `docker-compose` com Mongo replica set (`keyFile` no entrypoint, healthcheck com `rs.initiate()` — o `quit(0/1)` é necessário para o healthcheck refletir o PRIMARY) + Outbox/Inbox no `order-service` (`OrderOutboxIT`, `OutboxRelayTest`, `OutboxServiceTest`). `OutboxMessageRepositoryImpl.claimNext` faz o claim com lease via `findAndModify`; `SagaProducer` removido; `MAX_BLOCK_MS=5s` no producer para que `send()` não bloqueie 60 s (estourando o lease) com o broker fora. Verificado manualmente: com o Kafka parado o `POST /api/order` retorna sucesso, a mensagem fica pendente com retries/backoff e vira `SENT` ao religar o Kafka (CA-01 formalizado na Fase 5). | Fase 1 |
 | 4 | ✅ Orquestrador: `SagaOrchestratorProducer` publica com `key = transactionId` e headers `x-message-id` (determinístico: `UUID.nameUUIDFromBytes(inputMessageId + ":" + targetTopic)`, com fallback para o `transactionId` quando a entrada não traz o header), `x-transaction-id` e `x-source`; envio síncrono propagando a exceção (+ `max.block.ms=5s`). `DefaultErrorHandler` com `ExponentialBackOffWithMaxRetries` (padrão 5 tentativas, 1 s → 10 s) e `DeadLetterPublishingRecoverer` para `<topic>.DLT` (tópicos DLT criados no startup); payload inválido (`IllegalArgumentException`) e `ValidationException` (sem rota na tabela do `SagaHandler`) são não-retentáveis e vão direto para a DLT. Testes: `SagaOrchestratorProducerTest`, `OrchestratorKafkaIT`. Verificado manualmente no compose: key e `message-id` esperados, mensagens inválidas na `orchestrator.DLT` sem travar a partição, e replay do `start-saga` desde o offset 0 sem efeitos duplicados. | Fase 0 |
-| 5 | Observabilidade (actuator/métricas), job de limpeza, testes de caos, atualização do README. | Fases 2–4 |
+| 5 | ✅ Observabilidade: `spring-boot-starter-actuator` + `micrometer-registry-prometheus` nos 4 serviços com outbox (`/actuator/health`, `/actuator/metrics`, `/actuator/prometheus`) e as métricas da seção 8 em `OutboxMetrics` (`outbox.pending.count` — no Mongo inclui `PROCESSING` —, `outbox.oldest.pending.age.seconds`, `outbox.failed.count`, `outbox.published.total`, `outbox.publish.failures.total`, `inbox.duplicates.total`). `OutboxCleanupJob` expurga `SENT` após `outbox.cleanup.retention-hours` (padrão 72 h, cron `OUTBOX_CLEANUP_CRON`, RF-06). `scripts/chaos-test.sh` automatiza o caos (Kafka parado + `kill -9` de order, payment e inventory) e README atualizado. Fica de fora o endpoint opcional `GET /api/outbox/failed` / `POST /api/outbox/{id}/retry`: por ora mensagens `FAILED` são visíveis por log/métrica e o reprocesso é manual. | Fases 2–4 |
 | Futuro | Módulo compartilhado `outbox-starter` (ADR-08); migração do relay para Debezium; Kafka Transactions no orquestrador. | — |
 
 ## 12. Riscos e questões em aberto

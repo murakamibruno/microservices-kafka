@@ -39,6 +39,15 @@ outbox:
     max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
     base-backoff-ms: 1000
     max-backoff-ms: 60000
+  cleanup:
+    cron: ${OUTBOX_CLEANUP_CRON:0 0 * * * *}
+    retention-hours: ${OUTBOX_RETENTION_HOURS:72}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
 
 logging:
   level:

@@ -423,7 +423,7 @@ order-db:
     # Inicializa o replica set na primeira execução e passa a reportar saudável quando há PRIMARY
     test: >
       mongosh --quiet -u admin -p 123456 --authenticationDatabase admin --eval
-      "try { rs.status().myState === 1 } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'order-db:27017'}]}); false }"
+      "try { quit(rs.status().myState === 1 ? 0 : 1) } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'order-db:27017'}]}); quit(1) }"
     interval: 5s
     retries: 30
   ports:
@@ -713,7 +713,7 @@ Conforme ADR-08, o código de outbox/inbox é **duplicado** em cada serviço nes
 | 0 | Producers idempotentes + envio síncrono com propagação de erro em **todos** os serviços (mitiga P2 imediatamente). | — |
 | 1 | ✅ Outbox + Inbox no `payment-service` (serviço piloto, migration `V2`) + testes de integração. CA-02..06 cobertos (`PaymentOutboxIT`, `OutboxRelayTest`); CA-01 depende do teste de caos (Fase 5). | Fase 0 |
 | 2 | ✅ Outbox + Inbox replicados em `product-validation-service` e `inventory-service` (migration `V202610121045__create_outbox_inbox.sql`: a `V2` já estava "ocupada" pela `V3` de seed nesses bancos, então a convenção passa a ser versão por timestamp `yyyyMMddHHmm` para migrations novas, sem `out-of-order`) + `ProductValidationOutboxIT` e `InventoryOutboxIT`. Falha de negócio reverte a transação e publica `ROLLBACK_PENDING` numa segunda transação (com inbox). | Fase 1 |
-| 3 | `docker-compose` com Mongo replica set + Outbox no `order-service`. | Fase 1 |
+| 3 | ✅ `docker-compose` com Mongo replica set (`keyFile` no entrypoint, healthcheck com `rs.initiate()` — o `quit(0/1)` é necessário para o healthcheck refletir o PRIMARY) + Outbox/Inbox no `order-service` (`OrderOutboxIT`, `OutboxRelayTest`, `OutboxServiceTest`). `OutboxMessageRepositoryImpl.claimNext` faz o claim com lease via `findAndModify`; `SagaProducer` removido; `MAX_BLOCK_MS=5s` no producer para que `send()` não bloqueie 60 s (estourando o lease) com o broker fora. Verificado manualmente: com o Kafka parado o `POST /api/order` retorna sucesso, a mensagem fica pendente com retries/backoff e vira `SENT` ao religar o Kafka (CA-01 formalizado na Fase 5). | Fase 1 |
 | 4 | Orquestrador: chave, headers, `message-id` determinístico, error handler + DLT. | Fase 0 |
 | 5 | Observabilidade (actuator/métricas), job de limpeza, testes de caos, atualização do README. | Fases 2–4 |
 | Futuro | Módulo compartilhado `outbox-starter` (ADR-08); migração do relay para Debezium; Kafka Transactions no orquestrador. | — |

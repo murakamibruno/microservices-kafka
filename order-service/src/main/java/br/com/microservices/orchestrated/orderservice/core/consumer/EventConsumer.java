@@ -5,6 +5,9 @@ import br.com.microservices.orchestrated.orderservice.core.utils.JsonUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -18,10 +21,12 @@ public class EventConsumer {
         groupId = "${spring.kafka.consumer.group-id}",
         topics = "${spring.kafka.topic.notify-ending}"
     )
-    public void consumeNotifyEndingEvent(String payload) {
+    public void consumeNotifyEndingEvent(@Payload String payload,
+                                         @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                                         @Header(name = "x-message-id", required = false) String messageId) {
         log.info("Receiving ending notification event from {} from notify-ending topic", payload);
         var event = jsonUtil.toEvent(payload);
-        service.notifyEnding(event);
+        service.notifyEnding(event, topic, messageId);
     }
 
 }

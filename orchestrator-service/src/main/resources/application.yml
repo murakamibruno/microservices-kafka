@@ -9,6 +9,13 @@ spring:
       orchestrator: orchestrator
       finish-success: finish-success
       finish-fail: finish-fail
+    producer:
+      properties:
+        max.block.ms: 5000
+    error-handler:
+      max-retries: ${ERROR_HANDLER_MAX_RETRIES:5}
+      initial-interval-ms: ${ERROR_HANDLER_INITIAL_INTERVAL_MS:1000}
+      max-interval-ms: ${ERROR_HANDLER_MAX_INTERVAL_MS:10000}
     consumer:
       group-id: orchestrator-group
       auto-offset-reset: latest

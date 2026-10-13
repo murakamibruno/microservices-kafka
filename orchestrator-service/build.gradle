@@ -8,6 +8,8 @@ group = 'br.com.microservices.orchestrated'
 version = '0.0.1-SNAPSHOT'
 sourceCompatibility = '17'
 
+ext['testcontainers.version'] = '1.21.4'
+
 configurations {
 	compileOnly {
 		extendsFrom annotationProcessor
@@ -27,6 +29,8 @@ dependencies {
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.springframework.kafka:spring-kafka-test'
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:kafka'
 }
 
 tasks.named('test') {
